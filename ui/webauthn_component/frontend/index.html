@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <title>WebAuthn Component</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+      background: transparent;
+      color: #E8EEFF;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 12px 16px;
+      min-height: 80px;
+    }
+    button {
+      background: #2F6BFF;
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 12px 28px;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+      margin: 6px 0;
+      transition: background 200ms, transform 150ms;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+    button:hover:not(:disabled) { background: #5B8CFF; transform: translateY(-1px); }
+    button:active:not(:disabled) { transform: translateY(0); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    #status {
+      font-size: 13px;
+      color: #8A98B8;
+      margin-top: 8px;
+      text-align: center;
+      min-height: 18px;
+    }
+    .success { color: #2DD4A0 !important; }
+    .error   { color: #FF4D6A !important; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+    }
+  </style>
+</head>
+<body>
+  <button id="btn-action" disabled>
+    <span class="spinner"></span>&nbsp;Memuat…
+  </button>
+  <div id="status">Menunggu opsi dari server…</div>
+
+  <script>
+    // ─────────────────────────────────────────────────────────────────────────
+    // Streamlit Component Protocol (inline, tanpa npm)
+    // Protokol ini meniru streamlit-component-lib.js
+    // ─────────────────────────────────────────────────────────────────────────
+    const RENDER_EVENT = "streamlit:render";
+    const SET_FRAME_HEIGHT_EVENT = "streamlit:setFrameHeight";
+    const SET_COMPONENT_VALUE_EVENT = "streamlit:setComponentValue";
+    const COMPONENT_READY_EVENT = "streamlit:componentReady";
+
+    const Streamlit = {
+      events: {
+        _listeners: {},
+        addEventListener(type, fn) {
+          (this._listeners[type] = this._listeners[type] || []).push(fn);
+        },
+        dispatch(type, detail) {
+          (this._listeners[type] || []).forEach(fn => fn({ data: detail }));
+        },
+      },
+      RENDER_EVENT,
+
+      setComponentReady() {
+        window.parent.postMessage({ type: COMPONENT_READY_EVENT, apiVersion: 1 }, "*");
+      },
+
+      setFrameHeight(height) {
+        window.parent.postMessage(
+          { type: SET_FRAME_HEIGHT_EVENT, height: height || document.body.scrollHeight + 16 },
+          "*"
+        );
+      },
+
+      setComponentValue(value) {
+        window.parent.postMessage(
+          { type: SET_COMPONENT_VALUE_EVENT, value, dataType: "json" },
+          "*"
+        );
+      },
+    };
+
+    // Terima render events dari Streamlit parent
+    window.addEventListener("message", (event) => {
+      if (event.data.type === "streamlit:render") {
+        Streamlit.events.dispatch(RENDER_EVENT, event.data);
+      }
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Utilitas Base64URL ↔ ArrayBuffer
+    // ─────────────────────────────────────────────────────────────────────────
+    function b64urlToBuffer(b64url) {
+      const b64 = b64url.replace(/-/g, "+").replace(/_/g, "/");
+      const bin = atob(b64);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      return arr.buffer;
+    }
+
+    function bufferToB64url(buf) {
+      const arr = new Uint8Array(buf);
+      let bin = "";
+      arr.forEach(b => (bin += String.fromCharCode(b)));
+      return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // UI
+    // ─────────────────────────────────────────────────────────────────────────
+    const btn      = document.getElementById("btn-action");
+    const statusEl = document.getElementById("status");
+
+    let currentMode    = null;
+    let currentOptions = null;
+
+    function setStatus(msg, cls) {
+      statusEl.textContent = msg;
+      statusEl.className   = cls || "";
+    }
+
+    function setButtonReady(mode) {
+      const icon  = mode === "register" ? "📲" : "🔑";
+      const label = mode === "register"
+        ? "Daftarkan Passkey / Biometrik"
+        : "Login dengan Passkey / Biometrik";
+      btn.innerHTML = icon + " " + label;
+      btn.disabled  = false;
+    }
+
+    function setButtonLoading() {
+      btn.innerHTML = '<span class="spinner"></span>&nbsp;Memproses…';
+      btn.disabled  = true;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Klik tombol → panggil WebAuthn browser API
+    // ─────────────────────────────────────────────────────────────────────────
+    btn.addEventListener("click", async () => {
+      if (!currentOptions) {
+        setStatus("❌ Opsi belum tersedia dari server.", "error");
+        return;
+      }
+
+      setButtonLoading();
+      setStatus("Menunggu respons biometrik…");
+
+      try {
+        let result;
+
+        if (currentMode === "register") {
+          const opts = JSON.parse(currentOptions);
+          opts.challenge = b64urlToBuffer(opts.challenge);
+          opts.user.id   = b64urlToBuffer(opts.user.id);
+          if (opts.excludeCredentials) {
+            opts.excludeCredentials = opts.excludeCredentials.map(c => ({
+              ...c, id: b64urlToBuffer(c.id),
+            }));
+          }
+          const cred = await navigator.credentials.create({ publicKey: opts });
+          result = {
+            type:  "public-key",
+            id:    cred.id,
+            rawId: bufferToB64url(cred.rawId),
+            response: {
+              clientDataJSON:    bufferToB64url(cred.response.clientDataJSON),
+              attestationObject: bufferToB64url(cred.response.attestationObject),
+            },
+          };
+          setStatus("✅ Passkey berhasil didaftarkan!", "success");
+
+        } else {
+          const opts = JSON.parse(currentOptions);
+          opts.challenge = b64urlToBuffer(opts.challenge);
+          if (opts.allowCredentials) {
+            opts.allowCredentials = opts.allowCredentials.map(c => ({
+              ...c, id: b64urlToBuffer(c.id),
+            }));
+          }
+          const cred = await navigator.credentials.get({ publicKey: opts });
+          result = {
+            type:  "public-key",
+            id:    cred.id,
+            rawId: bufferToB64url(cred.rawId),
+            response: {
+              clientDataJSON:    bufferToB64url(cred.response.clientDataJSON),
+              authenticatorData: bufferToB64url(cred.response.authenticatorData),
+              signature:         bufferToB64url(cred.response.signature),
+              userHandle: cred.response.userHandle
+                ? bufferToB64url(cred.response.userHandle) : null,
+            },
+          };
+          setStatus("✅ Autentikasi berhasil!", "success");
+        }
+
+        Streamlit.setComponentValue(result);
+
+      } catch (err) {
+        const msg =
+          err.name === "NotAllowedError"
+            ? "Dibatalkan atau tidak diizinkan. Coba lagi."
+            : err.name === "InvalidStateError"
+            ? "Passkey sudah terdaftar sebelumnya."
+            : err.message || "Terjadi kesalahan tidak dikenal.";
+        setStatus("❌ " + msg, "error");
+        setButtonReady(currentMode);
+      }
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Terima props dari Python lewat Streamlit render event
+    // ─────────────────────────────────────────────────────────────────────────
+    Streamlit.events.addEventListener(RENDER_EVENT, (event) => {
+      const args = event.data.args || {};
+      const { mode, options_json } = args;
+      if (!mode || !options_json) return;
+
+      if (mode !== currentMode || options_json !== currentOptions) {
+        currentMode    = mode;
+        currentOptions = options_json;
+        setButtonReady(mode);
+        setStatus("Klik tombol lalu ikuti prompt biometrik.");
+      }
+
+      Streamlit.setFrameHeight();
+    });
+
+    // Beri tahu Streamlit bahwa komponen siap
+    Streamlit.setComponentReady();
+    Streamlit.setFrameHeight();
+  </script>
+</body>
+</html>
