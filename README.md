@@ -164,5 +164,5 @@ obsidian-vault/
 
 | Anggota | Modul |
 |---|---|
-| Anggota 1 | Auth/WebAuthn + DB + keamanan session |
-| Anggota 2 | Super enkripsi teks + enkripsi file + steganografi |
+| Diandra 22 | Auth/WebAuthn + DB + keamanan session |
+| Ghazian 13| Super enkripsi teks + enkripsi file + steganografi |
