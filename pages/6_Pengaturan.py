@@ -1,11 +1,12 @@
 """
 pages/6_Pengaturan.py — Pengaturan vault: timeout, difficulty PoW, kelola passkey, ekspor/hapus.
+Diperbarui untuk Isolasi Multi-User (T5).
 """
 
 import streamlit as st
 
 import config
-from core.auth.session import require_auth, logout
+from core.auth.session import require_auth, logout, get_current_user_id
 from ui.styles import inject_global_css, dev_mode_banner
 from ui.components import quick_menu, page_header, navbar, footer
 
@@ -21,6 +22,8 @@ navbar("settings")
 
 if config.DEV_MODE:
     dev_mode_banner()
+
+user_id: int = get_current_user_id()
 
 page_header("Pengaturan", "Konfigurasi vault Anda", icon_bi="gear-fill")
 
@@ -38,7 +41,6 @@ with col_l:
         step=1,
     )
     if st.button("Simpan Timeout", use_container_width=True):
-        # Perbarui nilai runtime (berlaku untuk sesi ini saja)
         config.SESSION_TIMEOUT = timeout_minutes * 60
         st.success(f"Timeout diperbarui: {timeout_minutes} menit.")
 
@@ -53,7 +55,6 @@ with col_l:
     )
     if st.button("Simpan Difficulty", use_container_width=True):
         config.POW_DIFFICULTY = difficulty
-        # Reset blockchain cache agar difficulty baru digunakan
         if "blockchain" in st.session_state:
             del st.session_state["blockchain"]
         st.success(f"Difficulty diperbarui: {difficulty}")
@@ -93,22 +94,22 @@ with col_r:
     st.markdown("---")
     st.markdown("#### Ekspor & Hapus Data")
     st.warning(
-        "Hapus data akan menghapus **seluruh pesan, file, stego, dan blockchain** dari database. "
+        "Hapus data akan menghapus **seluruh pesan, file, stego, dan blockchain** milik akun Anda. "
         "Tindakan ini **tidak dapat dibatalkan**.",
         icon="⚠️",
     )
     confirm = st.checkbox("Saya memahami risiko penghapusan data")
-    if st.button("Hapus Semua Data", disabled=not confirm, use_container_width=True):
+    if st.button("Hapus Semua Data Akun Saya", disabled=not confirm, use_container_width=True):
         from core.db.database import get_connection
         with get_connection() as conn:
-            conn.execute("DELETE FROM messages")
-            conn.execute("DELETE FROM files")
-            conn.execute("DELETE FROM stego_items")
-            conn.execute("DELETE FROM blocks")
+            conn.execute("DELETE FROM messages WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM files WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM stego_items WHERE user_id = ?", (user_id,))
+            conn.execute("DELETE FROM blocks WHERE user_id = ?", (user_id,))
             conn.commit()
         if "blockchain" in st.session_state:
             del st.session_state["blockchain"]
-        st.success("Semua data vault telah dihapus.")
+        st.success("Semua data milik akun Anda telah dihapus.")
         st.rerun()
 
 quick_menu()

@@ -1,5 +1,6 @@
 """
 pages/5_Aset_Blockchain.py — Blockchain aset: daftarkan, verifikasi, jelajah, validasi.
+Diperbarui untuk Isolasi Multi-User (T5).
 """
 
 import streamlit as st
@@ -8,7 +9,7 @@ import hashlib
 import time
 
 import config
-from core.auth.session import require_auth
+from core.auth.session import require_auth, get_current_user_id
 from ui.styles import inject_global_css, dev_mode_banner
 from ui.components import quick_menu, page_header, navbar, footer
 from core.blockchain.chain import Blockchain
@@ -26,6 +27,9 @@ navbar("asset")
 
 if config.DEV_MODE:
     dev_mode_banner()
+
+user_id: int = get_current_user_id()
+master_key: bytes = st.session_state["master_key"]
 
 # ── Page-level styles ─────────────────────────────────────────────────────────
 st.markdown("""
@@ -71,18 +75,17 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-master_key: bytes = st.session_state["master_key"]
-
 page_header(
     "Aset Blockchain",
     "Catat & verifikasi integritas aset digital menggunakan SHA-256 + HMAC + PoW",
     icon_bi="link-45deg",
 )
 
-# ── Muat blockchain (cached in session) ───────────────────────────────────────
-if "blockchain" not in st.session_state:
+# ── Muat blockchain spesifik user (cached in session) ─────────────────────────
+if "blockchain" not in st.session_state or st.session_state.get("blockchain_user_id") != user_id:
     with st.spinner("Memuat blockchain dari database…"):
-        st.session_state["blockchain"] = Blockchain(master_key)
+        st.session_state["blockchain"] = Blockchain(master_key, user_id=user_id)
+        st.session_state["blockchain_user_id"] = user_id
 
 chain: Blockchain = st.session_state["blockchain"]
 

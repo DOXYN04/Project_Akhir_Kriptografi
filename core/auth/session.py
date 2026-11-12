@@ -1,5 +1,6 @@
 """
 core/auth/session.py — Manajemen sesi HMAC + gerbang autentikasi.
+Diperbarui untuk mendukung getter user_id multi-user.
 """
 
 import hmac
@@ -36,6 +37,11 @@ def create_session(user_id: int, master_key: bytes) -> None:
     s["last_activity"] = issued
 
 
+def get_current_user_id() -> int:
+    """Mengembalikan user_id dari sesi pengguna yang sedang login."""
+    return st.session_state.get("auth_user_id", 1)
+
+
 def session_expired(s: dict) -> bool:
     """Kembalikan True bila sesi sudah melewati SESSION_TIMEOUT."""
     last = s.get("last_activity", 0)
@@ -50,8 +56,12 @@ def touch_session() -> None:
 
 def _clear_session() -> None:
     """Hapus semua data sesi sensitif dari session_state."""
-    sensitive = ["auth_ok", "auth_user_id", "auth_issued", "auth_token",
-                 "auth_payload", "master_key", "last_activity"]
+    sensitive = [
+        "auth_ok", "auth_user_id", "auth_issued", "auth_token",
+        "auth_payload", "master_key", "last_activity", "auth_username",
+        "blockchain", "blockchain_user_id", "passkey_auth_opts",
+        "passkey_reg_opts", "pending_reg", "pending_reg_user_id"
+    ]
     for k in sensitive:
         if k in st.session_state:
             if k == "master_key":

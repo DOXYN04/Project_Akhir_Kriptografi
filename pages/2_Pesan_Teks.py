@@ -1,18 +1,18 @@
 """
 pages/2_Pesan_Teks.py — Super enkripsi pesan teks (Vigenère + Transposisi + AES-GCM).
+Diperbarui untuk Isolasi Multi-User (T5).
 """
 
 import streamlit as st
 
 import config
-from core.auth.session import require_auth
+from core.auth.session import require_auth, get_current_user_id
 from ui.styles import inject_global_css, dev_mode_banner
 from ui.components import quick_menu, page_header, navbar, footer
 from ui.layout import golden_columns
 from core.crypto.text_super import encrypt_text, decrypt_text, encrypt_text_steps
 from core.db import models as db_models
 from core.auth.kdf import hkdf_derive
-from core.crypto.modern import aes_gcm_encrypt, aes_gcm_decrypt
 
 st.set_page_config(
     page_title=f"Pesan Teks — {config.APP_NAME}",
@@ -27,6 +27,7 @@ navbar("message")
 if config.DEV_MODE:
     dev_mode_banner()
 
+user_id: int = get_current_user_id()
 master_key: bytes = st.session_state["master_key"]
 
 page_header("Pesan Teks", "Enkripsi & dekripsi pesan dengan super enkripsi", icon_bi="envelope-lock-fill")
@@ -79,6 +80,7 @@ with tab_enc:
                     title_blob = nonce_t + title_ct
 
                     msg_id = db_models.save_message(
+                        user_id=user_id,
                         title_enc=title_blob,
                         body_enc=token.encode("ascii"),
                         is_important=is_important,
@@ -122,7 +124,7 @@ with tab_dec:
 # Tab Daftar Pesan
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_list:
-    rows = db_models.list_messages()
+    rows = db_models.list_messages(user_id)
     if not rows:
         st.info("Belum ada pesan tersimpan.")
     else:
@@ -136,7 +138,7 @@ with tab_list:
                 except Exception as e:
                     st.warning(f"Tidak bisa dekripsi: {e}")
                 if st.button(f"Hapus #{row['id']}", key=f"del_msg_{row['id']}"):
-                    db_models.delete_message(row["id"])
+                    db_models.delete_message(user_id, row["id"])
                     st.rerun()
 
 quick_menu()

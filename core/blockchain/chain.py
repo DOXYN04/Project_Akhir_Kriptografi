@@ -2,6 +2,7 @@
 core/blockchain/chain.py — Rantai blok: genesis, PoW, validasi, persist ke DB.
 
 Setiap blok menyertakan tanda tangan HMAC-SHA256 atas data sebagai bukti kepemilikan.
+Diperbarui untuk mendukung Isolasi Multi-User (T5).
 """
 
 import hashlib
@@ -26,8 +27,9 @@ def _owner_sig(data: dict, master_key: bytes) -> str:
 class Blockchain:
     """Rantai blok single-node tamper-evident untuk aset penting."""
 
-    def __init__(self, master_key: bytes, difficulty: int = config.POW_DIFFICULTY):
+    def __init__(self, master_key: bytes, user_id: int, difficulty: int = config.POW_DIFFICULTY):
         self.master_key = master_key
+        self.user_id = user_id
         self.difficulty = difficulty
         self.chain: list[Block] = []
         self._load_from_db()
@@ -45,10 +47,12 @@ class Blockchain:
         )
         genesis.hash = genesis.compute_hash()
         self.chain.append(genesis)
-        db.save_block(genesis.to_dict())
+        # Tambahkan user_id ke fungsi save_block
+        db.save_block(self.user_id, genesis.to_dict())
 
     def _load_from_db(self) -> None:
-        rows = db.load_blocks()
+        # Tambahkan user_id saat memuat rantai blok
+        rows = db.load_blocks(self.user_id)
         self.chain = [Block.from_dict(r) for r in rows]
 
     # ── Mining (PoW) ───────────────────────────────────────────────────────────
@@ -95,7 +99,8 @@ class Blockchain:
         )
         block = self._mine(block)
         self.chain.append(block)
-        db.save_block(block.to_dict())
+        # Tambahkan user_id ke fungsi save_block
+        db.save_block(self.user_id, block.to_dict())
         return block
 
     # ── Validasi ──────────────────────────────────────────────────────────────

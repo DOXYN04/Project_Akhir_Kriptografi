@@ -1,12 +1,12 @@
 """
-pages/1_Beranda.py — Halaman beranda Obsidian Vault.
-Menampilkan statistik dan kartu pintasan.
+pages/1_Beranda.py — Halaman beranda Obsidian Vault (Isolasi Multi-User).
+Menampilkan statistik dan kartu pintasan khusus user yang sedang login.
 """
 
 import streamlit as st
 
 import config
-from core.auth.session import require_auth
+from core.auth.session import require_auth, get_current_user_id
 from ui.styles import inject_global_css, dev_mode_banner
 from ui.components import quick_menu, stat_card, page_header, navbar, footer
 from core.db import models as db_models
@@ -24,13 +24,14 @@ navbar("beranda")   # tanpa tombol Back
 if config.DEV_MODE:
     dev_mode_banner()
 
-# ── Statistik ─────────────────────────────────────────────────────────────────
-msg_count   = len(db_models.list_messages())
-file_count  = len(db_models.list_files())
-stego_count = len(db_models.list_stego_items())
-from core.db.database import get_connection
-with get_connection() as c:
-    block_count = c.execute("SELECT COUNT(*) FROM blocks").fetchone()[0]
+# ── Ambil User ID dari Sesi ──────────────────────────────────────────────────
+user_id = get_current_user_id()
+
+# ── Statistik Khusus User ─────────────────────────────────────────────────────
+msg_count   = len(db_models.list_messages(user_id))
+file_count  = len(db_models.list_files(user_id))
+stego_count = len(db_models.list_stego_items(user_id))
+block_count = len(db_models.load_blocks(user_id))
 
 page_header("Beranda", "Ringkasan keamanan brankas Anda", icon_bi="house-fill")
 

@@ -1,15 +1,17 @@
 """
 pages/4_Pesan_Gambar.py — Steganografi LSB: sembunyikan & ekstrak pesan dari gambar.
+Diperbarui untuk Isolasi Multi-User (T5).
 """
 
 import streamlit as st
 import io
 
 import config
-from core.auth.session import require_auth
+from core.auth.session import require_auth, get_current_user_id
 from ui.styles import inject_global_css, dev_mode_banner
 from ui.components import quick_menu, page_header, navbar, footer
 from core.stego.lsb_image import embed, extract, capacity, psnr
+from core.db import models as db_models
 
 st.set_page_config(
     page_title=f"Pesan Gambar — {config.APP_NAME}",
@@ -24,11 +26,12 @@ navbar("stego")
 if config.DEV_MODE:
     dev_mode_banner()
 
+user_id: int = get_current_user_id()
 master_key: bytes = st.session_state["master_key"]
 
 page_header("Pesan Gambar", "Sembunyikan pesan rahasia dalam gambar menggunakan LSB Steganografi", icon_bi="image-fill")
 
-tab_hide, tab_extract = st.tabs(["Sembunyikan", "Ekstrak"])
+tab_hide, tab_extract, tab_list = st.tabs(["Sembunyikan", "Ekstrak", "Daftar Gambar"])
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Tab Sembunyikan
@@ -75,6 +78,10 @@ with tab_hide:
                     )
                     psnr_val = psnr(img_bytes_fresh, stego_bytes)
 
+                    # Simpan catatan stego ke database per user
+                    stego_path = f"data/stego_{image_up.name}"
+                    db_models.save_stego_item(user_id, stego_path)
+
                     col_orig, col_stego = st.columns(2)
                     with col_orig:
                         st.markdown("**Gambar Asli**")
@@ -88,7 +95,7 @@ with tab_hide:
                         f"{psnr_val:.2f} dB" if psnr_val != float("inf") else "∞ dB",
                         help="Nilai > 50 dB: perubahan tidak terlihat secara visual",
                     )
-                    st.success("Pesan berhasil disembunyikan!")
+                    st.success("Pesan berhasil disembunyikan dan catatan disimpan!")
                     st.download_button(
                         "Unduh Gambar Stego (PNG)",
                         data=stego_bytes,
@@ -129,6 +136,18 @@ with tab_extract:
                     st.error(f"❌ Gagal: {e}")
                 except UnicodeDecodeError:
                     st.warning("Pesan terekstrak bukan teks UTF-8 (mungkin data biner).")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tab Daftar Gambar
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_list:
+    stego_items = db_models.list_stego_items(user_id)
+    if not stego_items:
+        st.info("Belum ada riwayat gambar stego tersimpan.")
+    else:
+        for item in stego_items:
+            with st.expander(f"Item Stego #{item['id']} — {item['created_at']}"):
+                st.write(f"**Path Gambar:** `{item['image_path']}`")
 
 quick_menu()
 footer()

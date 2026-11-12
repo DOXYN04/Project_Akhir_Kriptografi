@@ -4,6 +4,8 @@ First page shown: Login / Register (state machine, no sidebar, no quick menu).
 """
 
 import os
+import json
+import time
 import streamlit as st
 from dotenv import load_dotenv
 
@@ -36,12 +38,10 @@ if config.DEV_MODE:
 # ── Auth page extra styles ────────────────────────────────────────────────────
 st.markdown("""
 <style>
-/* First column = branding panel */
 [data-testid="column"]:first-child {
   background: var(--surface);
   border-right: 1px solid var(--border);
 }
-/* Divider between passphrase form and passkey button */
 .or-divider {
   display: flex; align-items: center; gap: 10px;
   margin: 18px 0; color: var(--muted); font-size: 12px;
@@ -50,7 +50,6 @@ st.markdown("""
   content: ''; flex: 1;
   height: 1px; background: var(--border);
 }
-/* Passkey button — ghost blue border */
 .passkey-btn-wrap button {
   background: transparent !important;
   border: 1px solid var(--primary) !important;
@@ -61,20 +60,13 @@ st.markdown("""
 }
 
 @keyframes slideDownForm {
-  0% {
-    opacity: 0;
-    transform: translateY(-15px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  0% { opacity: 0; transform: translateY(-15px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
 
 .auth-form-dropdown {
   animation: slideDownForm 0.35s ease-out forwards;
 }
-
 </style>
 """, unsafe_allow_html=True)
 
@@ -92,20 +84,12 @@ from core.db import models as db_models
 from core.auth.kdf import hash_pin, verify_pin, derive_master_key
 from core.auth.session import create_session
 
-# ── Inject WebAuthn postMessage listener (produksi only, height=0) ───────────
-# Dipanggil di luar semua kondisi agar listener selalu aktif saat halaman dimuat.
 if not config.DEV_MODE:
     from ui.webauthn_component import inject_listener
     inject_listener()
 
-# ═════════════════════════════════════════════════════════════════════════════
-# TWO-COLUMN LAYOUT  Left → Branding  |  Right → Form
-# ═════════════════════════════════════════════════════════════════════════════
 col_brand, col_form = st.columns([1, 1], gap="small")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# LEFT — Branding panel
-# ─────────────────────────────────────────────────────────────────────────────
 with col_brand:
     mode      = st.session_state["auth_mode"]
     icon_name = "shield-lock-fill" if mode == "login" else "person-plus-fill"
@@ -142,21 +126,13 @@ with col_brand:
     st.markdown(feat_html, unsafe_allow_html=True)
     st.markdown('</div>', unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# RIGHT — Auth form
-# ─────────────────────────────────────────────────────────────────────────────
 with col_form:
-
-    # ── Tab bar: Masuk | Daftar ───────────────────────────────────────────────
-    is_login = st.session_state["auth_mode"] == "login"
-    is_reg   = st.session_state["auth_mode"] == "register"
-
     tc1, tc2 = st.columns(2)
     with tc1:
         if st.button(
             "Masuk",
             use_container_width=True,
-            type="primary" if is_login else "secondary",
+            type="primary" if st.session_state["auth_mode"] == "login" else "secondary",
             key="tab_masuk",
         ):
             st.session_state["auth_mode"] = "login"
@@ -165,46 +141,39 @@ with col_form:
         if st.button(
             "Daftar",
             use_container_width=True,
-            type="primary" if is_reg else "secondary",
+            type="primary" if st.session_state["auth_mode"] == "register" else "secondary",
             key="tab_daftar",
         ):
             st.session_state["auth_mode"] = "register"
             st.rerun()
 
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-# ═════════════════════════════════════════════════════════════════════════
+
+    # ═════════════════════════════════════════════════════════════════════════
     # MODE: LOGIN
     # ═════════════════════════════════════════════════════════════════════════
     if st.session_state["auth_mode"] == "login":
         st.markdown('<div class="auth-form-dropdown">', unsafe_allow_html=True)
-
         st.markdown(
             '<div class="form-heading">'
             '<i class="bi bi-box-arrow-in-right"></i> Masuk ke Brankas'
             '</div>'
             '<p class="form-sub">'
-            'Masukkan nama pengguna dan passphrase, '
-            'atau gunakan Passkey biometrik Anda.'
+            'Masukkan nama pengguna dan passphrase, atau gunakan Passkey biometrik Anda.'
             '</p>',
             unsafe_allow_html=True,
         )
 
-        # ── Form passphrase ───────────────────────────────────────────────────
+        uname_in = st.text_input(
+            "Nama Pengguna",
+            placeholder="Contoh: diandra",
+            value=st.session_state.get("prefill_username", ""),
+            key="input_username_login",
+        )
+
         with st.form("form_login", clear_on_submit=False):
-            uname_in = st.text_input(
-                "Nama Pengguna",
-                placeholder="Contoh: diandra",
-                value=st.session_state.get("prefill_username", ""),
-            )
-            pass_in = st.text_input(
-                "Passphrase",
-                type="password",
-                placeholder="Masukkan passphrase Anda",
-            )
-            login_btn = st.form_submit_button(
-                "Masuk dengan Passphrase",
-                use_container_width=True,
-            )
+            pass_in = st.text_input("Passphrase", type="password", placeholder="Masukkan passphrase Anda")
+            login_btn = st.form_submit_button("Masuk dengan Passphrase", use_container_width=True)
 
         if login_btn:
             u = uname_in.strip()
@@ -213,17 +182,11 @@ with col_form:
             else:
                 user = db_models.get_user_by_username(u)
                 if not user:
-                    st.error(
-                        "Akun tidak ditemukan. "
-                        "Buka tab **Daftar** untuk membuat akun baru."
-                    )
+                    st.error("Akun tidak ditemukan. Buka tab **Daftar** untuk membuat akun baru.")
                 elif not user.get("pin_hash"):
                     st.error("Akun ini tidak mendukung login passphrase.")
                 elif verify_pin(pass_in, user["pin_hash"]):
-                    master_key = derive_master_key(
-                        pass_in.encode("utf-8"),
-                        user["kdf_salt"],
-                    )
+                    master_key = derive_master_key(pass_in.encode("utf-8"), user["kdf_salt"])
                     create_session(user["id"], master_key)
                     st.session_state["auth_username"] = u
                     st.session_state.pop("prefill_username", None)
@@ -232,81 +195,65 @@ with col_form:
                 else:
                     st.error("Passphrase salah. Coba lagi.")
 
-        # ── Divider ───────────────────────────────────────────────────────────
-        st.markdown(
-            '<div class="or-divider">atau</div>',
-            unsafe_allow_html=True,
-        )
+        st.markdown('<div class="or-divider">atau</div>', unsafe_allow_html=True)
 
-        # ── Tombol Passkey ────────────────────────────────────────────────────
         if config.DEV_MODE:
-            # DEV MODE: passkey hardware tidak tersedia, tampilkan info
             st.markdown('<div class="passkey-btn-wrap">', unsafe_allow_html=True)
-            if st.button(
-                "Masuk dengan Passkey / Biometrik",
-                use_container_width=True,
-                key="btn_passkey_login",
-            ):
-                st.info(
-                    "**Passkey tidak tersedia di DEV MODE.**  \n"
-                    "Untuk menggunakan biometrik (sidik jari / wajah / FIDO2), "
-                    "set `DEV_MODE=false` di file `.env` dan restart aplikasi.",
-                    icon="ℹ️",
-                )
+            if st.button("Masuk dengan Passkey / Biometrik", use_container_width=True, key="btn_passkey_login"):
+                st.info("Passkey tidak tersedia di DEV MODE.", icon="ℹ️")
             st.markdown('</div>', unsafe_allow_html=True)
         else:
-            # PRODUKSI: alur WebAuthn langsung via browser API (tanpa PyArrow)
             from core.auth import webauthn_service as wa
             from ui.webauthn_component import webauthn_widget, read_webauthn_result, get_pending_mode
 
-            user_row = db_models.get_first_user()
-            if not user_row:
-                st.warning(
-                    "Belum ada akun dengan Passkey terdaftar. "
-                    "Buka tab **Daftar** terlebih dahulu.",
-                    icon="⚠️",
-                )
+            u_login = uname_in.strip()
+            user_row = db_models.get_user_by_username(u_login) if u_login else None
+
+            if not u_login:
+                st.info("Masukkan **Nama Pengguna** di atas terlebih dahulu untuk login dengan Passkey / Biometrik.", icon="ℹ️")
+            elif not user_row:
+                st.warning(f"Akun **{u_login}** tidak ditemukan. Silakan daftar terlebih dahulu.", icon="⚠️")
+            elif not user_row.get("credential_id") or user_row.get("public_key") in (b"PENDING", b"DEV_MODE"):
+                st.warning(f"Akun **{u_login}** belum memiliki Passkey terdaftar.", icon="⚠️")
             else:
-                # Cek apakah ada hasil WebAuthn yang baru kembali via query params
+                if "passkey_auth_opts" not in st.session_state or st.session_state.get("auth_opts_user") != u_login:
+                    st.session_state["passkey_auth_opts"] = wa.generate_authentication_options(user_row["id"], user_row["credential_id"])
+                    st.session_state["auth_opts_user"] = u_login
+
+                webauthn_widget(mode="authenticate", options_json=st.session_state["passkey_auth_opts"])
+
                 if get_pending_mode() == "authenticate":
                     auth_result = read_webauthn_result()
                     if auth_result:
+                        # Rerun force to process state
+                        if not st.session_state.get("auth_processing"):
+                             st.session_state["auth_processing"] = True
+                             st.rerun()
+                             
                         try:
+                            if isinstance(auth_result, str):
+                                auth_result = json.loads(auth_result)
+                                
                             new_count = wa.verify_authentication(
-                                user_row["id"],
-                                auth_result,
-                                user_row["public_key"],
-                                user_row["sign_count"],
+                                user_row["id"], auth_result, user_row["public_key"], user_row["sign_count"]
                             )
                             db_models.update_sign_count(user_row["id"], new_count)
-                            master_key = derive_master_key(
-                                user_row["credential_id"],
-                                user_row["kdf_salt"],
-                            )
+                            master_key = derive_master_key(user_row["credential_id"], user_row["kdf_salt"])
                             create_session(user_row["id"], master_key)
-                            st.session_state["auth_username"] = (
-                                user_row.get("username") or "user"
-                            )
+                            
+                            st.session_state["auth_username"] = user_row.get("username") or u_login
                             st.session_state.pop("passkey_auth_opts", None)
+                            st.session_state.pop("auth_processing", None)
+                            
                             st.success("Autentikasi Passkey berhasil!")
+                            time.sleep(1.5)
                             st.rerun()
                         except Exception as exc:
+                            print(f"\n[ERROR AUTH WEBAUTHN] {exc}\n")
                             st.error(f"Verifikasi gagal: {exc}")
                             st.session_state.pop("passkey_auth_opts", None)
+                            st.session_state.pop("auth_processing", None)
 
-                # Generate opsi sekali per sesi
-                if "passkey_auth_opts" not in st.session_state:
-                    st.session_state["passkey_auth_opts"] = wa.generate_authentication_options(
-                        user_row["id"], user_row["credential_id"]
-                    )
-
-                # Tampilkan tombol — klik langsung trigger biometrik di browser
-                webauthn_widget(
-                    mode="authenticate",
-                    options_json=st.session_state["passkey_auth_opts"],
-                )
-
-        # Penutup container animasi Mode Login (diletakkan di luar `if/else` DEV_MODE)
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ═════════════════════════════════════════════════════════════════════════
@@ -324,29 +271,14 @@ with col_form:
             unsafe_allow_html=True,
         )
 
-        with st.form("form_register", clear_on_submit=True):
-            uname_reg = st.text_input(
-                "Nama Pengguna",
-                placeholder="Minimal 3 karakter",
-            )
-            pass_reg = st.text_input(
-                "Passphrase",
-                type="password",
-                placeholder="Minimal 8 karakter",
-            )
-            pass_reg2 = st.text_input(
-                "Konfirmasi Passphrase",
-                type="password",
-                placeholder="Ulangi passphrase di atas",
-            )
-            reg_btn = st.form_submit_button(
-                "Buat Akun",
-                use_container_width=True,
-            )
+        with st.form("form_register", clear_on_submit=False):
+            uname_reg = st.text_input("Nama Pengguna", placeholder="Minimal 3 karakter")
+            pass_reg = st.text_input("Passphrase", type="password", placeholder="Minimal 8 karakter")
+            pass_reg2 = st.text_input("Konfirmasi Passphrase", type="password", placeholder="Ulangi passphrase di atas")
+            reg_btn = st.form_submit_button("Buat Akun", use_container_width=True)
 
         if reg_btn:
-            u   = uname_reg.strip()
-            err = None
+            u, err = uname_reg.strip(), None
             if   not u:                err = "Nama pengguna wajib diisi."
             elif len(u) < 3:           err = "Nama pengguna minimal 3 karakter."
             elif not pass_reg:         err = "Passphrase wajib diisi."
@@ -359,35 +291,20 @@ with col_form:
                 st.error(f"Nama pengguna **{u}** sudah digunakan.")
             else:
                 try:
-                    pin_hash = hash_pin(pass_reg)
-                    salt     = os.urandom(16)
+                    pin_hash, salt = hash_pin(pass_reg), os.urandom(16)
                     if config.DEV_MODE:
-                        # DEV MODE: simpan langsung tanpa WebAuthn
                         db_models.create_user(
-                            credential_id=os.urandom(16),
-                            public_key=b"DEV_MODE",
-                            kdf_salt=salt,
-                            pin_hash=pin_hash,
-                            username=u,
+                            credential_id=os.urandom(16), public_key=b"DEV_MODE", kdf_salt=salt, pin_hash=pin_hash, username=u
                         )
                         st.success(f"Akun **{u}** berhasil dibuat!")
-                        st.info(
-                            "Passphrase di-hash dengan Argon2id — tidak bisa dibaca balik.  \n"
-                            "Klik tab **Masuk** untuk login."
-                        )
                         st.session_state["prefill_username"] = u
                     else:
-                        # PRODUKSI: simpan data sementara, lanjut ke pendaftaran passkey
-                        st.session_state["pending_reg"] = {
-                            "username": u,
-                            "pin_hash": pin_hash,
-                            "kdf_salt": salt,
-                        }
+                        st.session_state["pending_reg"] = {"username": u, "pin_hash": pin_hash, "kdf_salt": salt}
                         st.rerun()
                 except Exception as exc:
                     st.error(f"Gagal membuat akun: {exc}")
 
-        # ── Langkah 2 pendaftaran produksi: daftarkan Passkey ─────────────────
+        # ── Langkah 2 Pendaftaran Produksi: Registrasi Passkey Biometrik ─────
         if not config.DEV_MODE and "pending_reg" in st.session_state:
             from core.auth import webauthn_service as wa
             from ui.webauthn_component import webauthn_widget, read_webauthn_result, get_pending_mode
@@ -395,19 +312,54 @@ with col_form:
             pending = st.session_state["pending_reg"]
             u       = pending["username"]
 
-            # Buat user sementara di DB jika belum ada (butuh ID untuk challenge)
             if "pending_reg_user_id" not in st.session_state:
                 tmp_id = db_models.create_user(
-                    credential_id=os.urandom(16),
-                    public_key=b"PENDING",
-                    kdf_salt=pending["kdf_salt"],
-                    pin_hash=pending["pin_hash"],
-                    username=u,
+                    credential_id=os.urandom(16), public_key=b"PENDING", kdf_salt=pending["kdf_salt"], pin_hash=pending["pin_hash"], username=u
                 )
                 st.session_state["pending_reg_user_id"] = tmp_id
 
             user_id = st.session_state["pending_reg_user_id"]
 
-            # Cek apakah ada hasil registrasi yang baru kembali via query params
-# ── Footer ────────────────────────────────────────────────────────────────────
+            st.markdown("---")
+            st.info(f"Akun **{u}** siap didaftarkan. Klik tombol di bawah untuk mendaftarkan Passkey / Sidik Jari Anda.", icon="ℹ️")
+
+            if "passkey_reg_opts" not in st.session_state:
+                st.session_state["passkey_reg_opts"] = wa.generate_registration_options(u, user_id)
+
+            webauthn_widget(mode="register", options_json=st.session_state["passkey_reg_opts"])
+
+            if get_pending_mode() == "register":
+                reg_result = read_webauthn_result()
+                if reg_result:
+                    # Rerun force to process state
+                    if not st.session_state.get("reg_processing"):
+                        st.session_state["reg_processing"] = True
+                        st.rerun()
+
+                    try:
+                        if isinstance(reg_result, str):
+                            reg_result = json.loads(reg_result)
+
+                        cred_id, pub_key = wa.verify_registration(user_id, reg_result)
+                        db_models.update_webauthn_credential(user_id, cred_id, pub_key)
+                        
+                        st.session_state.pop("pending_reg", None)
+                        st.session_state.pop("pending_reg_user_id", None)
+                        st.session_state.pop("passkey_reg_opts", None)
+                        st.session_state.pop("reg_processing", None)
+                        
+                        st.session_state["prefill_username"] = u
+                        st.session_state["auth_mode"] = "login"
+                        
+                        st.success(f"🎉 Passkey untuk akun **{u}** berhasil didaftarkan! Silakan masuk.")
+                        time.sleep(1.5)
+                        st.rerun()
+                    except Exception as exc:
+                        print(f"\n[ERROR REG WEBAUTHN] {exc}\n")
+                        st.error(f"Gagal mendaftarkan Passkey: {exc}")
+                        st.session_state.pop("passkey_reg_opts", None)
+                        st.session_state.pop("reg_processing", None)
+
+        st.markdown('</div>', unsafe_allow_html=True)
+
 footer()

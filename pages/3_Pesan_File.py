@@ -1,20 +1,22 @@
 """
 pages/3_Pesan_File.py — Enkripsi & dekripsi file dengan ChaCha20-Poly1305.
+Diperbarui untuk Isolasi Multi-User (T5).
 """
 
 import streamlit as st
 import io
+import json
+import os
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 import config
-from core.auth.session import require_auth
+from core.auth.session import require_auth, get_current_user_id
 from ui.styles import inject_global_css, dev_mode_banner
 from ui.components import quick_menu, page_header, navbar, footer
 from ui.layout import golden_columns
 from core.crypto.file_crypto import encrypt_file, decrypt_file, file_sha256
 from core.db import models as db_models
 from core.auth.kdf import hkdf_derive
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-import os
 
 st.set_page_config(
     page_title=f"Enkripsi File — {config.APP_NAME}",
@@ -29,6 +31,7 @@ navbar("file")
 if config.DEV_MODE:
     dev_mode_banner()
 
+user_id: int = get_current_user_id()
 master_key: bytes = st.session_state["master_key"]
 
 page_header("Enkripsi File", "Enkripsi file apapun dengan ChaCha20-Poly1305", icon_bi="file-earmark-lock2-fill")
@@ -64,7 +67,6 @@ with tab_enc:
                         orig_hash = file_sha256(data)
 
                         # Simpan metadata terenkripsi ke DB
-                        import json
                         meta = json.dumps({
                             "orig_name": uploaded.name,
                             "size": len(data),
@@ -76,7 +78,7 @@ with tab_enc:
                         meta_enc = nonce_m + meta_ct
 
                         vault_path = f"data/{uploaded.name}.vault"
-                        db_models.save_file_record(vault_path, meta_enc)
+                        db_models.save_file_record(user_id, vault_path, meta_enc)
 
                         st.success(f"File dienkripsi ({len(vault_bytes):,} byte).")
                         st.metric("SHA-256 Asli", orig_hash[:32] + "…")
@@ -124,25 +126,24 @@ with tab_dec:
 # Tab Daftar File
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_list:
-    files = db_models.list_files()
+    files = db_models.list_files(user_id)
     if not files:
         st.info("Belum ada file terenkripsi.")
     else:
-        import json as _json
         meta_key = hkdf_derive(master_key, b"db-field", 32)
         for f in files:
             with st.expander(f"File #{f['id']} — {f['created_at']}"):
                 try:
                     blob = f["meta_enc"]
                     plain_meta = AESGCM(meta_key).decrypt(blob[:12], blob[12:], b"files:meta_enc:0")
-                    meta = _json.loads(plain_meta)
+                    meta = json.loads(plain_meta)
                     st.write(f"**Nama:** {meta.get('orig_name','?')}")
                     st.write(f"**Ukuran:** {meta.get('size',0):,} byte")
                     st.write(f"**SHA-256:** `{meta.get('sha256','?')[:32]}…`")
                 except Exception as e:
                     st.warning(f"Metadata tidak bisa dibaca: {e}")
                 if st.button(f"Hapus #{f['id']}", key=f"del_file_{f['id']}"):
-                    db_models.delete_file_record(f["id"])
+                    db_models.delete_file_record(user_id, f["id"])
                     st.rerun()
 
 quick_menu()

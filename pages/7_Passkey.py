@@ -1,14 +1,13 @@
 """
 pages/7_Passkey.py — Manajemen Passkey / WebAuthn (hanya setelah login).
-Fitur ini hanya tersedia untuk mode produksi (bukan DEV_MODE).
+Diperbarui untuk pendaftaran biometrik otomatis via browser API.
 """
 
 import streamlit as st
 import json
-import os
-
+import time
 import config
-from core.auth.session import require_auth
+from core.auth.session import require_auth, get_current_user_id
 from ui.styles import inject_global_css, dev_mode_banner
 from ui.components import quick_menu, page_header, navbar, footer
 
@@ -25,6 +24,8 @@ navbar("passkey")
 if config.DEV_MODE:
     dev_mode_banner()
 
+user_id: int = get_current_user_id()
+
 page_header(
     "Manajemen Passkey",
     "Daftarkan atau kelola passkey biometrik / FIDO2 Anda",
@@ -39,29 +40,20 @@ if config.DEV_MODE:
         "Untuk menggunakan biometrik, matikan DEV_MODE di file `.env`.",
         icon="ℹ️",
     )
-    st.markdown(
-        """
-        <div style="background:var(--surface-2);border:1px solid var(--border);
-          border-radius:12px;padding:20px 24px;margin-top:16px">
-          <p style="font-size:14px;color:var(--muted);margin:0 0 12px">
-            <i class="bi bi-file-text-fill" style="color:var(--primary)"></i>
-            Untuk mengaktifkan WebAuthn/Passkey, edit file <code>.env</code>:
-          </p>
-          <pre style="background:var(--bg);border:1px solid var(--border);
-            border-radius:8px;padding:12px;font-size:13px;color:var(--text);
-            margin:0">DEV_MODE=false
-RP_ID=localhost
-RP_NAME=Obsidian Vault
-ORIGIN=http://localhost:8501</pre>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 else:
     from core.auth import webauthn_service as wa
     from core.db import models as db_models
+    from core.db.database import get_connection
+    from ui.webauthn_component import webauthn_widget, read_webauthn_result, get_pending_mode, inject_listener
 
-    user = db_models.get_first_user()
+    inject_listener()
+
+    conn = get_connection()
+    try:
+        user_row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        user = dict(user_row) if user_row else None
+    finally:
+        conn.close()
 
     col_l, col_r = st.columns(2)
 
@@ -75,52 +67,35 @@ else:
         )
         st.markdown(
             '<p style="font-size:14px;color:var(--muted);margin-bottom:20px">'
-            'Daftarkan biometrik (sidik jari/wajah) atau kunci keamanan FIDO2.'
+            'Klik tombol di bawah untuk mendaftarkan biometrik (sidik jari/wajah) perangkat Anda.'
             '</p>',
             unsafe_allow_html=True,
         )
 
-        if st.button(
-            "Generate Opsi Pendaftaran",
-            use_container_width=True,
-            type="primary",
-            key="btn_gen_reg",
-        ):
-            opts_json = wa.generate_registration_options("vault-user", 1)
-            st.session_state["reg_options"] = opts_json
+        username = user.get("username", "user") if user else "user"
 
-        if "reg_options" in st.session_state:
-            st.markdown(
-                '<p style="font-size:12px;color:var(--muted);margin:12px 0 6px">'
-                'Salin JSON di bawah ke WebAuthn client browser Anda:'
-                '</p>',
-                unsafe_allow_html=True,
-            )
-            st.code(st.session_state["reg_options"], language="json")
-            reg_response = st.text_area(
-                "Tempel respons registrasi (JSON)",
-                height=120,
-                key="reg_resp_input",
-            )
-            if st.button(
-                "Verifikasi & Simpan Passkey",
-                use_container_width=True,
-                key="btn_verify_reg",
-            ):
+        if get_pending_mode() == "register":
+            reg_result = read_webauthn_result()
+            if reg_result:
                 try:
-                    cred = json.loads(reg_response)
-                    cred_id, pub_key = wa.verify_registration(1, cred)
-                    salt = os.urandom(16)
-                    db_models.create_user(
-                        credential_id=cred_id,
-                        public_key=pub_key,
-                        kdf_salt=salt,
-                    )
-                    del st.session_state["reg_options"]
-                    st.success("Passkey berhasil didaftarkan!")
+                    if isinstance(reg_result, str):
+                        reg_result = json.loads(reg_result)
+                        
+                    cred_id, pub_key = wa.verify_registration(user_id, reg_result)
+                    db_models.update_webauthn_credential(user_id, cred_id, pub_key)
+                    st.session_state.pop("page_passkey_reg_opts", None)
+                    st.success("🎉 Passkey biometrik berhasil didaftarkan!")
+                    time.sleep(1.5)
                     st.rerun()
                 except Exception as exc:
-                    st.error(f"Gagal mendaftarkan passkey: {exc}")
+                    print(f"\n[ERROR PAGE PASSKEY] {exc}\n")
+                    st.error(f"Gagal mendaftarkan Passkey: {exc}")
+                    st.session_state.pop("page_passkey_reg_opts", None)
+
+        if "page_passkey_reg_opts" not in st.session_state:
+            st.session_state["page_passkey_reg_opts"] = wa.generate_registration_options(username, user_id)
+
+        webauthn_widget(mode="register", options_json=st.session_state["page_passkey_reg_opts"])
 
     with col_r:
         st.markdown(
@@ -130,7 +105,7 @@ else:
             '</div>',
             unsafe_allow_html=True,
         )
-        if user and user.get("credential_id"):
+        if user and user.get("credential_id") and user.get("public_key") not in (b"PENDING", b"DEV_MODE"):
             st.markdown(
                 '<div style="background:var(--surface);border:1px solid var(--border);'
                 'border-radius:12px;padding:20px">'
@@ -139,7 +114,7 @@ else:
                 '<span style="font-weight:600">Passkey Aktif</span>'
                 '</div>'
                 '<p style="font-size:13px;color:var(--muted);margin:0">'
-                'Akun Anda sudah terlindungi dengan passkey biometrik/FIDO2.'
+                'Akun Anda sudah terhubung dengan biometrik hardware/FIDO2.'
                 '</p>'
                 '</div>',
                 unsafe_allow_html=True,
@@ -153,7 +128,7 @@ else:
                 '<span style="font-weight:600">Belum Ada Passkey</span>'
                 '</div>'
                 '<p style="font-size:13px;color:var(--muted);margin:0">'
-                'Daftarkan passkey untuk keamanan biometrik.'
+                'Daftarkan Passkey biometrik agar dapat login tanpa passphrase.'
                 '</p>'
                 '</div>',
                 unsafe_allow_html=True,
