@@ -160,10 +160,9 @@ obsidian-vault/
 
 ---
 
-## Pembagian Tugas (Saran)
+## Pembagian Tugas
 
 | Anggota | Modul |
 |---|---|
 | Anggota 1 | Auth/WebAuthn + DB + keamanan session |
 | Anggota 2 | Super enkripsi teks + enkripsi file + steganografi |
-| Anggota 3 | Blockchain + UI/UX + animasi + dokumentasi |
